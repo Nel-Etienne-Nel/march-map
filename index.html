@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>March n March Hot Spots</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+#map { height: 100vh; width: 100%; }
+.panel {
+  position: absolute; top: 10px; right: 10px; z-index: 1000;
+  background: white; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,.3);
+  width: 320px; max-height: 90vh; overflow-y: auto;
+}
+.panel h2 { background: #c0392b; color: white; padding: 12px 16px; margin: 0; border-radius: 8px 8px 0 0; font-size: 16px; }
+.panel form { padding: 12px 16px; }
+.panel label { display: block; font-size: 13px; font-weight: 600; margin-top: 8px; }
+.panel input, .panel select, .panel textarea {
+  width: 100%; padding: 6px 8px; margin-top: 4px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;
+}
+.panel textarea { height: 60px; resize: vertical; }
+.panel button {
+  margin-top: 12px; width: 100%; padding: 8px; background: #c0392b; color: white;
+  border: none; border-radius: 4px; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.panel button:hover { background: #a93226; }
+.panel button:disabled { background: #999; cursor: not-allowed; }
+.panel .hint { font-size: 11px; color: #888; margin-top: 4px; }
+.panel .status { font-size: 12px; padding: 6px 16px; }
+.panel .status.error { color: #e74c3c; }
+.panel .status.success { color: #27ae60; }
+.legend {
+  position: absolute; bottom: 30px; left: 10px; z-index: 1000;
+  background: white; padding: 10px 14px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.3);
+  font-size: 13px;
+}
+.legend div { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.legend span { display: inline-block; width: 14px; height: 14px; border-radius: 50%; }
+.count-bar {
+  position: absolute; top: 10px; left: 10px; z-index: 1000;
+  background: white; padding: 10px 14px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.3);
+  font-size: 13px;
+}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="count-bar" id="countBar">Loading hotspots...</div>
+
+<div class="panel" id="addPanel">
+  <h2>Add a Protest Hotspot</h2>
+  <form id="addForm">
+    <label>Province</label>
+    <select id="f-province">
+      <option>Gauteng</option><option>KwaZulu-Natal</option><option>Western Cape</option>
+      <option>Eastern Cape</option><option>Northern Cape</option><option>North West</option>
+      <option>Limpopo</option><option>Mpumalanga</option><option>Free State</option>
+    </select>
+    <label>Hotspot / Area</label>
+    <input id="f-area" required placeholder="e.g. Sandton CBD">
+    <label>Risk Level</label>
+    <select id="f-risk">
+      <option>High</option><option>Medium</option><option>Low</option>
+    </select>
+    <label>Primary Risk</label>
+    <textarea id="f-desc" placeholder="Describe the risk..."></textarea>
+    <label>Location</label>
+    <input id="f-lat" type="number" step="any" placeholder="Latitude (click map)" required>
+    <input id="f-lng" type="number" step="any" placeholder="Longitude" required style="margin-top:4px">
+    <p class="hint">Click the map to auto-fill coordinates</p>
+    <button type="submit" id="submitBtn">Add to Map</button>
+  </form>
+  <div class="status" id="formStatus"></div>
+</div>
+
+<div class="legend">
+  <strong>Risk Level</strong>
+  <div><span style="background:#e74c3c"></span> High</div>
+  <div><span style="background:#f39c12"></span> Medium</div>
+  <div><span style="background:#3498db"></span> Low</div>
+</div>
+
+<script>
+// ── CONFIG: Replace these with your Supabase project values ──
+const SUPABASE_URL = 'YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+// ─────────────────────────────────────────────────────────────
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const COLORS = { High: '#e74c3c', Medium: '#f39c12', Low: '#3498db' };
+const markers = new Map();
+
+const map = L.map('map').setView([-29, 25], 6);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+function makeMarker(row) {
+  if (markers.has(row.id)) return;
+  const color = COLORS[row.risk];
+  const m = L.circleMarker([row.lat, row.lng], {
+    radius: row.risk === 'High' ? 10 : row.risk === 'Medium' ? 7 : 5,
+    fillColor: color, color: '#fff', weight: 2, fillOpacity: 0.85
+  }).addTo(map);
+  m.bindPopup(`
+    <strong>${row.area}</strong><br>
+    <em>${row.province}</em><br>
+    <span style="color:${color};font-weight:700">${row.risk} Risk</span><br>
+    <small>${row.description || ''}</small>
+  `);
+  markers.set(row.id, m);
+}
+
+function updateCount() {
+  document.getElementById('countBar').textContent = `${markers.size} hotspots on map`;
+}
+
+async function loadAll() {
+  const { data, error } = await sb.from('hotspots').select('*');
+  if (error) {
+    document.getElementById('countBar').textContent = 'Error loading data';
+    console.error(error);
+    return;
+  }
+  data.forEach(makeMarker);
+  updateCount();
+}
+
+// Real-time: new rows appear on everyone's map instantly
+sb.channel('hotspots-realtime')
+  .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'hotspots' }, payload => {
+    makeMarker(payload.new);
+    updateCount();
+  })
+  .subscribe();
+
+loadAll();
+
+map.on('click', e => {
+  document.getElementById('f-lat').value = e.latlng.lat.toFixed(4);
+  document.getElementById('f-lng').value = e.latlng.lng.toFixed(4);
+});
+
+document.getElementById('addForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = document.getElementById('submitBtn');
+  const status = document.getElementById('formStatus');
+  btn.disabled = true;
+  btn.textContent = 'Adding...';
+  status.textContent = '';
+
+  const row = {
+    province: document.getElementById('f-province').value,
+    area: document.getElementById('f-area').value,
+    lat: parseFloat(document.getElementById('f-lat').value),
+    lng: parseFloat(document.getElementById('f-lng').value),
+    risk: document.getElementById('f-risk').value,
+    description: document.getElementById('f-desc').value
+  };
+
+  const { error } = await sb.from('hotspots').insert([row]);
+  btn.disabled = false;
+  btn.textContent = 'Add to Map';
+
+  if (error) {
+    status.className = 'status error';
+    status.textContent = 'Failed to add: ' + error.message;
+  } else {
+    status.className = 'status success';
+    status.textContent = 'Added successfully!';
+    e.target.reset();
+    setTimeout(() => status.textContent = '', 3000);
+  }
+});
+</script>
+</body>
+</html>
