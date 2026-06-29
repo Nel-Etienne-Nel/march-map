@@ -16,7 +16,11 @@ alter table hotspots enable row level security;
 
 create policy "Public read" on hotspots for select using (true);
 create policy "Public insert" on hotspots for insert with check (true);
-create policy "Public delete" on hotspots for delete using (true);
+
+-- Only the admin account may delete. Enforced server-side regardless of UI.
+create policy "Owner delete" on hotspots
+  for delete to authenticated
+  using ( (auth.jwt() ->> 'email') = 'neletienne18@gmail.com' );
 
 -- Seed with the initial data
 insert into hotspots (province, area, lat, lng, risk, description) values
