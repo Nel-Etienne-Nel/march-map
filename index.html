@@ -111,9 +111,25 @@ function makeMarker(row) {
     <strong>${row.area}</strong><br>
     <em>${row.province}</em><br>
     <span style="color:${color};font-weight:700">${row.risk} Risk</span><br>
-    <small>${row.description || ''}</small>
+    <small>${row.description || ''}</small><br>
+    <button onclick="deleteHotspot(${row.id})"
+      style="margin-top:8px;background:#e74c3c;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px">
+      Delete
+    </button>
   `);
   markers.set(row.id, m);
+}
+
+function removeMarker(id) {
+  const m = markers.get(id);
+  if (m) { map.removeLayer(m); markers.delete(id); updateCount(); }
+}
+
+async function deleteHotspot(id) {
+  if (!confirm('Delete this hotspot?')) return;
+  const { error } = await sb.from('hotspots').delete().eq('id', id);
+  if (error) { alert('Delete failed: ' + error.message); return; }
+  removeMarker(id); // realtime DELETE will also fire for other viewers
 }
 
 function updateCount() {
@@ -137,13 +153,34 @@ sb.channel('hotspots-realtime')
     makeMarker(payload.new);
     updateCount();
   })
+  .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'hotspots' }, payload => {
+    removeMarker(payload.old.id);
+  })
   .subscribe();
 
 loadAll();
 
+// Click-to-place: drop a draggable pin, fine-tune by dragging
+let pending = null;
+
+function setCoords(latlng) {
+  document.getElementById('f-lat').value = latlng.lat.toFixed(4);
+  document.getElementById('f-lng').value = latlng.lng.toFixed(4);
+}
+
+function clearPending() {
+  if (pending) { map.removeLayer(pending); pending = null; }
+}
+
 map.on('click', e => {
-  document.getElementById('f-lat').value = e.latlng.lat.toFixed(4);
-  document.getElementById('f-lng').value = e.latlng.lng.toFixed(4);
+  setCoords(e.latlng);
+  if (!pending) {
+    pending = L.marker(e.latlng, { draggable: true }).addTo(map);
+    pending.on('dragend', () => setCoords(pending.getLatLng()));
+  } else {
+    pending.setLatLng(e.latlng);
+  }
+  pending.bindPopup('New hotspot here &mdash; fill the form, then Add. Drag me to adjust.').openPopup();
 });
 
 document.getElementById('addForm').addEventListener('submit', async e => {
@@ -174,6 +211,7 @@ document.getElementById('addForm').addEventListener('submit', async e => {
     status.className = 'status success';
     status.textContent = 'Added successfully!';
     e.target.reset();
+    clearPending();
     setTimeout(() => status.textContent = '', 3000);
   }
 });
