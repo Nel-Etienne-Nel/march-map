@@ -8,6 +8,8 @@ create table hotspots (
   lng double precision not null,
   risk text not null check (risk in ('High', 'Medium', 'Low')),
   description text,
+  verified boolean not null default false,  -- false = news/public-sourced, awaiting admin review
+  source text,                              -- e.g. 'news bot', 'public submission'
   created_at timestamptz default now()
 );
 
@@ -21,6 +23,12 @@ create policy "Public insert" on hotspots for insert with check (true);
 create policy "Owner delete" on hotspots
   for delete to authenticated
   using ( (auth.jwt() ->> 'email') = 'neletienne18@gmail.com' );
+
+-- Only the admin may update (e.g. flip verified). Enforced server-side.
+create policy "Owner update" on hotspots
+  for update to authenticated
+  using      ( (auth.jwt() ->> 'email') = 'neletienne18@gmail.com' )
+  with check ( (auth.jwt() ->> 'email') = 'neletienne18@gmail.com' );
 
 -- Seed with the initial data
 insert into hotspots (province, area, lat, lng, risk, description) values
@@ -61,3 +69,6 @@ insert into hotspots (province, area, lat, lng, risk, description) values
   ('Mpumalanga','Komatipoort / Lebombo border route',-25.4300,31.9540,'Medium','Border-route disruption, truck delays, spill-over intimidation.'),
   ('Free State','Bloemfontein / Mangaung',-29.0852,26.1596,'Medium','CBD disruption, commuter impact, copycat action.'),
   ('Free State','N1 / N3 connector routes / Harrismith approach',-28.2720,29.1290,'Medium','Transit disruption, freight delay, isolated blockade risk.');
+
+-- Mark the official seed as verified
+update hotspots set verified = true;

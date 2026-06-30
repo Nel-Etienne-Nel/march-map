@@ -61,9 +61,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 .admin-bar button { margin-top: 6px; padding: 5px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; background: #2c3e50; color: #fff; }
 .admin-bar .err { color: #e74c3c; font-size: 12px; display: block; margin-top: 4px; }
 .admin-bar .who { font-weight: 600; }
-/* Delete buttons only visible to a logged-in admin */
-.del-btn { display: none; }
-body.admin .del-btn { display: inline-block; }
+/* Delete + Verify buttons only visible to a logged-in admin */
+.del-btn, .verify-btn { display: none; }
+body.admin .del-btn, body.admin .verify-btn { display: inline-block; }
+.legend .hollow { background: transparent; border: 2px dashed #7f8c8d; }
 </style>
 </head>
 <body>
@@ -104,6 +105,7 @@ body.admin .del-btn { display: inline-block; }
   <div><span style="background:#e74c3c"></span> High</div>
   <div><span style="background:#f39c12"></span> Medium</div>
   <div><span style="background:#3498db"></span> Low</div>
+  <div><span class="hollow"></span> Unverified (news)</div>
 </div>
 
 <div class="admin-bar" id="adminBar">
@@ -145,21 +147,41 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 function makeMarker(row) {
   if (markers.has(row.id)) return;
   const color = COLORS[row.risk];
+  const verified = row.verified !== false; // default-treat missing as verified (pre-migration safety)
+  const style = verified
+    ? { fillColor: color, color: '#fff', weight: 2, fillOpacity: 0.85, dashArray: null }
+    : { fillColor: color, color: color, weight: 2, fillOpacity: 0.2, dashArray: '3' };
   const m = L.circleMarker([row.lat, row.lng], {
     radius: row.risk === 'High' ? 10 : row.risk === 'Medium' ? 7 : 5,
-    fillColor: color, color: '#fff', weight: 2, fillOpacity: 0.85
+    ...style
   }).addTo(map);
+
+  const badge = verified ? '' :
+    `<span style="display:inline-block;background:#7f8c8d;color:#fff;font-size:10px;padding:1px 6px;border-radius:3px;margin-bottom:4px">UNVERIFIED${row.source ? ' &middot; ' + row.source : ''}</span><br>`;
+  const verifyBtn = verified ? '' :
+    `<button class="verify-btn" onclick="verifyHotspot(${row.id})"
+      style="margin-top:8px;margin-right:4px;background:#27ae60;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px">
+      Verify</button>`;
+
   m.bindPopup(`
+    ${badge}
     <strong>${row.area}</strong><br>
     <em>${row.province}</em><br>
     <span style="color:${color};font-weight:700">${row.risk} Risk</span><br>
     <small>${row.description || ''}</small><br>
+    ${verifyBtn}
     <button class="del-btn" onclick="deleteHotspot(${row.id})"
       style="margin-top:8px;background:#e74c3c;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px">
       Delete
     </button>
   `);
   markers.set(row.id, m);
+}
+
+async function verifyHotspot(id) {
+  const { error } = await sb.from('hotspots').update({ verified: true }).eq('id', id);
+  if (error) { alert('Verify failed: ' + error.message); return; }
+  // realtime UPDATE will re-render the marker for everyone
 }
 
 function removeMarker(id) {
@@ -197,6 +219,12 @@ sb.channel('hotspots-realtime')
   })
   .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'hotspots' }, payload => {
     removeMarker(payload.old.id);
+  })
+  .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'hotspots' }, payload => {
+    // e.g. verified flipped — re-render the marker
+    const m = markers.get(payload.new.id);
+    if (m) { map.removeLayer(m); markers.delete(payload.new.id); }
+    makeMarker(payload.new);
   })
   .subscribe();
 
@@ -262,7 +290,10 @@ document.getElementById('addForm').addEventListener('submit', async e => {
     lat: parseFloat(document.getElementById('f-lat').value),
     lng: parseFloat(document.getElementById('f-lng').value),
     risk: document.getElementById('f-risk').value,
-    description: document.getElementById('f-desc').value
+    description: document.getElementById('f-desc').value,
+    // Admin form-adds are trusted; public submissions start unverified
+    verified: document.body.classList.contains('admin'),
+    source: document.body.classList.contains('admin') ? null : 'public submission'
   };
 
   const { error } = await sb.from('hotspots').insert([row]);
